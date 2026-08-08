@@ -1,0 +1,45 @@
+{
+  "name": "ecomwithai",
+  "version": "0.1.0",
+  "description": "Headless commerce for the edge, built so AI agents are first-class clients. Runs on Cloudflare Workers, Node, Deno or Bun.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "commerce",
+    "ecommerce",
+    "headless",
+    "mcp",
+    "ai-agent",
+    "cloudflare-workers",
+    "sqlite",
+    "libsql"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent": "./src/agent/index.ts",
+    "./catalog": "./src/catalog/index.ts",
+    "./customers": "./src/customers/index.ts",
+    "./orders": "./src/orders/index.ts",
+    "./stores": "./src/stores/index.ts",
+    "./shipping": "./src/shipping.ts",
+    "./marketing": "./src/marketing/index.ts",
+    "./db": "./src/db/index.ts",
+    "./schema": "./src/db/schema.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types src/commerce.test.ts && node --experimental-strip-types src/agent/agent.test.ts && node --experimental-strip-types src/marketing/hash.test.ts",
+    "test:one": "node --experimental-strip-types",
+    "mcp": "node --experimental-strip-types src/agent/mcp-stdio.ts"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.15.15"
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}
