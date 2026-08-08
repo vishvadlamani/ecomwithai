@@ -35,12 +35,16 @@
   "scripts": {
     "test": "node --experimental-strip-types src/commerce.test.ts && node --experimental-strip-types src/agent/agent.test.ts && node --experimental-strip-types src/hunt.test.ts && node --experimental-strip-types src/payments/payments.test.ts && node --experimental-strip-types src/marketing/hash.test.ts",
     "test:one": "node --experimental-strip-types",
-    "mcp": "node --experimental-strip-types src/agent/mcp-stdio.ts"
+    "mcp": "node --experimental-strip-types src/agent/mcp-stdio.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@libsql/client": "^0.15.15"
   },
   "engines": {
     "node": ">=22.6"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
   }
 }

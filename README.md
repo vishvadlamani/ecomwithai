@@ -245,10 +245,12 @@ handles concurrency server-side.
 ## Testing
 
 ```sh
+npm run typecheck
 npm test
 ```
 
-Offline, no network, no fixtures to maintain. Use a `file:` URL for test
+Both run in CI on Node 22 and 24. Tests are offline: no network, no keys, no
+fixtures to maintain. Use a `file:` URL for test
 databases, never `:memory:` — libSQL gives a transaction its own connection, and
 with `:memory:` that is a different database, so your schema vanishes the moment
 anything commits.

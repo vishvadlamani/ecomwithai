@@ -150,9 +150,7 @@ const replayed = await Promise.allSettled(
 	)
 );
 const numbers = new Set(
-	replayed
-		.filter((r): r is PromiseFulfilledResult<{ orderNumber: string }> => r.status === 'fulfilled')
-		.map((r) => r.value.orderNumber)
+	replayed.flatMap((r) => (r.status === 'fulfilled' ? [r.value.orderNumber] : []))
 );
 check('concurrent replays collapse to one order', numbers.size, 1);
 check(

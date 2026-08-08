@@ -1,4 +1,5 @@
 import { withBusyRetry, type Client } from '../db/index.ts';
+import type { InValue } from '@libsql/client';
 import type { CatalogService } from '../catalog/index.ts';
 import { normalizeEmail, type CustomerService } from '../customers/index.ts';
 import { DEFAULT_SHIPPING_RATES, resolveShippingCents, type ShippingRate } from '../shipping.ts';
@@ -105,7 +106,7 @@ export function createOrderService(deps: {
 		deps.orderNumber ??
 		(() => `${prefix}-${crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`);
 
-	async function loadOrder(where: string, args: unknown[]): Promise<Order | null> {
+	async function loadOrder(where: string, args: InValue[]): Promise<Order | null> {
 		const result = await db.execute({
 			sql: `select id, order_number, customer_id, email, status, subtotal_cents,
 			             shipping_cents, total_cents, currency, created_at
@@ -323,7 +324,7 @@ export function createOrderService(deps: {
 			const limit = Math.max(1, Math.min(250, Math.trunc(opts.limit ?? 50)));
 			const offset = Math.max(0, Math.trunc(opts.offset ?? 0));
 			const filter = opts.email ? 'and email = ?' : '';
-			const args: unknown[] = [storeId];
+			const args: InValue[] = [storeId];
 			if (opts.email) args.push(normalizeEmail(opts.email));
 			args.push(limit, offset);
 

@@ -268,9 +268,9 @@ export function createPaymentService(deps: {
 			const sessionOrIntentId = String(object.id ?? '');
 
 			const markPaid = async () => {
-				if (!orderNumber) return { handled: false, reason: 'order_not_found' as const };
+				if (!orderNumber) return { handled: false as const, reason: 'order_not_found' as const };
 				const row = await orderRow(orderNumber);
-				if (!row) return { handled: false, reason: 'order_not_found' as const };
+				if (!row) return { handled: false as const, reason: 'order_not_found' as const };
 
 				// The amount is asserted, never assumed: a session created elsewhere,
 				// or edited, must not be able to settle an order for less than it costs.
@@ -297,7 +297,7 @@ export function createPaymentService(deps: {
 						});
 					});
 					return {
-						handled: false,
+						handled: false as const,
 						reason: 'amount_mismatch' as const,
 						detail: `expected ${expected}, got ${paidCents}`
 					};
@@ -326,9 +326,9 @@ export function createPaymentService(deps: {
 				orderStatus: string,
 				options: { onlyIfUnpaid: boolean }
 			) => {
-				if (!orderNumber) return { handled: false, reason: 'order_not_found' as const };
+				if (!orderNumber) return { handled: false as const, reason: 'order_not_found' as const };
 				const row = await orderRow(orderNumber);
-				if (!row) return { handled: false, reason: 'order_not_found' as const };
+				if (!row) return { handled: false as const, reason: 'order_not_found' as const };
 
 				// Abandonment must not restock an order that already settled — a late
 				// `expired` after a successful payment would inflate inventory. A

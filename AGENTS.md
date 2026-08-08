@@ -18,8 +18,13 @@ src/testing.ts  fixtures for tests and demos
 ```
 
 ```sh
-npm test        # everything, offline
+npm run typecheck   # tsc --noEmit, strict
+npm test            # everything, offline
 ```
+
+Both gate CI. Run them before claiming a change is done — the package ships
+source, so a type error reaches consumers directly rather than failing a build
+here.
 
 ## Rules
 
