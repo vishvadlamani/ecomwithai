@@ -30,7 +30,7 @@ Ships TypeScript source. Node 22.6+ runs it directly with
 import { applySchema, createCommerce, createDirectory } from 'ecomwithai';
 
 const { db, stores } = createDirectory({ url: 'file:store.db' });
-await applySchema(db);
+await applySchema(db);           // also enables WAL + busy_timeout
 
 const store = await stores.byDomain('example.com');
 const commerce = createCommerce({ db, store });
@@ -159,6 +159,26 @@ with browser/server event deduplication.
 Not built yet: payments (orders are written `pending_payment` and **no card
 details are collected anywhere**), tax, an admin UI, transactional email,
 refunds and returns.
+
+## Concurrency
+
+Local SQLite ships with `journal_mode=delete` and `busy_timeout=0`, so a second
+writer fails instantly with `SQLITE_BUSY` rather than waiting — and two people
+checking out at the same moment is ordinary traffic, not an exceptional
+condition. `applySchema()` turns on WAL (a persistent property of the file) and
+sets a busy timeout. Because the timeout is per-connection, call
+`configureConnection(db)` once on every client you create:
+
+```ts
+import { configureConnection, createDirectory } from 'ecomwithai';
+
+const { db, stores } = createDirectory({ url: 'file:store.db' });
+await configureConnection(db);
+```
+
+Writes also retry on contention with jittered backoff. Domain failures are never
+retried — only lock contention. Against remote Turso both are no-ops, since it
+handles concurrency server-side.
 
 ## Testing
 

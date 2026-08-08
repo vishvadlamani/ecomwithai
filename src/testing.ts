@@ -2,7 +2,7 @@
  * Fixtures for tests and demos. Exported because anyone adopting the framework
  * needs a way to stand up a store with realistic shape in one call.
  */
-import { applySchema, createDb, type Client } from './db/index.ts';
+import { applySchema, configureConnection, createDb, type Client } from './db/index.ts';
 
 export type SeedProductInput = {
 	slug: string;
@@ -157,5 +157,6 @@ export async function createTestDb(url: string): Promise<Client> {
 	}
 	const db = createDb({ url });
 	await applySchema(db);
+	await configureConnection(db);
 	return db;
 }

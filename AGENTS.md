@@ -53,6 +53,13 @@ connection, which for `:memory:` is a different database — the schema vanishes
 mid-test with a baffling "no such table". `createTestDb` rejects it. Use a
 `file:` URL.
 
+**Local SQLite errors instead of waiting.** Default `busy_timeout` is 0 and the
+journal mode is `delete`, so concurrent writers get `SQLITE_BUSY` immediately.
+`applySchema` sets WAL and a timeout; `configureConnection` must be called per
+client. Standalone writes are wrapped in `withBusyRetry`. When adding a write
+path, wrap it — but never retry a statement *inside* someone else's transaction,
+which is why `customers.upsert` only retries when the executor is the client.
+
 **No parameter properties, enums or namespaces.** The package ships TypeScript
 source and Node's type stripping rejects that syntax. `CheckoutError` assigns
 its fields explicitly for this reason.

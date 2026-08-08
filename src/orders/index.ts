@@ -1,6 +1,6 @@
-import type { Client } from '../db/index.ts';
+import { withBusyRetry, type Client } from '../db/index.ts';
 import type { CatalogService } from '../catalog/index.ts';
-import type { CustomerService } from '../customers/index.ts';
+import { normalizeEmail, type CustomerService } from '../customers/index.ts';
 import { DEFAULT_SHIPPING_RATES, resolveShippingCents, type ShippingRate } from '../shipping.ts';
 
 export type CartLine = { variantId: number; quantity: number };
@@ -145,6 +145,7 @@ export function createOrderService(deps: {
 
 	return {
 		async create(input) {
+			// Input problems fail immediately — only contention is worth retrying.
 			for (const line of input.lines) {
 				if (!Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > MAX_QUANTITY) {
 					throw new CheckoutError('quantity_invalid', String(line.quantity));
@@ -157,147 +158,161 @@ export function createOrderService(deps: {
 				throw new CheckoutError('unknown_shipping_method', input.method);
 			}
 
-			// Replay protection before any work, so a retried call is cheap.
-			if (input.idempotencyKey) {
-				const existing = await loadOrder('idempotency_key = ?', [input.idempotencyKey]);
-				if (existing) return { ...existing, deduplicated: true };
-			}
+			// Stored normalized so `list({ email })` and the customer record agree.
+			const email = normalizeEmail(input.shipping.email);
+			const locale = input.locale ?? deps.defaultLocale ?? 'en';
 
-			// Merge duplicate lines so the stock guard sees the true total; two
-			// lines of the same variant would otherwise each pass a check for one.
+			// Merge duplicate lines so the stock guard sees the true total; two lines
+			// of the same variant would otherwise each pass a check for one.
 			const merged = new Map<number, number>();
 			for (const line of input.lines) {
 				merged.set(line.variantId, (merged.get(line.variantId) ?? 0) + line.quantity);
 			}
 
-			const priced = await catalog.priceVariants([...merged.keys()]);
-
-			let subtotalCents = 0;
-			const resolved = [...merged.entries()].map(([variantId, quantity]) => {
-				const variant = priced.get(variantId);
-				if (!variant) throw new CheckoutError('variant_unavailable', String(variantId));
-				subtotalCents += variant.unitPriceCents * quantity;
-				return { ...variant, quantity };
-			});
-
-			const totalCents = subtotalCents + shippingCents;
-			const orderNumber = nextOrderNumber();
-			const locale = input.locale ?? deps.defaultLocale ?? 'en';
-
-			const tx = await db.transaction('write');
-			try {
-				// Guarded decrement: if another order took the last unit between
-				// pricing and here, rowsAffected is 0 and we fail rather than oversell.
-				for (const item of resolved) {
-					const result = await tx.execute({
-						sql: `update product_variants set stock = stock - ?
-						      where id = ? and store_id = ? and stock >= ?`,
-						args: [item.quantity, item.variantId, storeId, item.quantity]
-					});
-					if (result.rowsAffected === 0) {
-						throw new CheckoutError('insufficient_stock', item.sku);
-					}
-				}
-
-				const customerId = await customers.upsert(
-					{
-						email: input.shipping.email,
-						firstName: input.shipping.firstName,
-						lastName: input.shipping.lastName,
-						phone: input.shipping.phone,
-						marketingConsent: input.marketingConsent
-					},
-					tx
-				);
-
-				const inserted = await tx.execute({
-					sql: `insert into orders (
-					        store_id, customer_id, order_number, email, phone,
-					        first_name, last_name, address1, address2, city, province,
-					        postal_code, country, shipping_method, subtotal_cents,
-					        shipping_cents, discount_cents, total_cents, currency, locale,
-					        status, idempotency_key
-					      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					args: [
-						storeId,
-						customerId,
-						orderNumber,
-						input.shipping.email,
-						input.shipping.phone ?? null,
-						input.shipping.firstName,
-						input.shipping.lastName,
-						input.shipping.address1,
-						input.shipping.address2 ?? null,
-						input.shipping.city,
-						input.shipping.province ?? null,
-						input.shipping.postalCode,
-						input.shipping.country,
-						input.method,
-						subtotalCents,
-						shippingCents,
-						0,
-						totalCents,
-						currency,
-						locale,
-						'pending_payment',
-						input.idempotencyKey ?? null
-					]
-				});
-
-				const orderId = Number(inserted.lastInsertRowid);
-
-				for (const item of resolved) {
-					await tx.execute({
-						sql: `insert into order_items (
-						        store_id, order_id, variant_id, product_slug, title, sku,
-						        option1, option2, option3, unit_price_cents, quantity
-						      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-						args: [
-							storeId,
-							orderId,
-							item.variantId,
-							item.productSlug,
-							item.title,
-							item.sku,
-							item.options[0],
-							item.options[1],
-							item.options[2],
-							item.unitPriceCents,
-							item.quantity
-						]
-					});
-				}
-
-				await customers.recordOrder(customerId, totalCents, tx);
-				await tx.commit();
-
-				return {
-					orderNumber,
-					customerId,
-					email: input.shipping.email,
-					status: 'pending_payment',
-					subtotalCents,
-					shippingCents,
-					totalCents,
-					currency,
-					items: resolved.map((item) => ({
-						sku: item.sku,
-						title: item.title,
-						options: item.options,
-						quantity: item.quantity,
-						unitPriceCents: item.unitPriceCents
-					}))
-				};
-			} catch (error) {
-				await tx.rollback();
-				// A concurrent call with the same key wins the unique constraint;
-				// return its order rather than surfacing a database error.
+			// SQLite serializes writers and hands the losers SQLITE_BUSY. Concurrent
+			// checkouts are ordinary traffic, so retry rather than surface a lock
+			// error. Re-checking the idempotency key on each attempt keeps it safe.
+			return withBusyRetry(async () => {
 				if (input.idempotencyKey) {
 					const existing = await loadOrder('idempotency_key = ?', [input.idempotencyKey]);
 					if (existing) return { ...existing, deduplicated: true };
 				}
-				throw error;
-			}
+
+				const priced = await catalog.priceVariants([...merged.keys()]);
+
+				let subtotalCents = 0;
+				const resolved = [...merged.entries()].map(([variantId, quantity]) => {
+					const variant = priced.get(variantId);
+					if (!variant) throw new CheckoutError('variant_unavailable', String(variantId));
+					subtotalCents += variant.unitPriceCents * quantity;
+					return { ...variant, quantity };
+				});
+
+				const totalCents = subtotalCents + shippingCents;
+				const orderNumber = nextOrderNumber();
+
+				const tx = await db.transaction('write');
+				try {
+					// Guarded decrement: if another order took the last unit between
+					// pricing and here, rowsAffected is 0 and we fail rather than oversell.
+					for (const item of resolved) {
+						const result = await tx.execute({
+							sql: `update product_variants set stock = stock - ?
+							      where id = ? and store_id = ? and stock >= ?`,
+							args: [item.quantity, item.variantId, storeId, item.quantity]
+						});
+						if (result.rowsAffected === 0) {
+							throw new CheckoutError('insufficient_stock', item.sku);
+						}
+					}
+
+					const customerId = await customers.upsert(
+						{
+							email,
+							firstName: input.shipping.firstName,
+							lastName: input.shipping.lastName,
+							phone: input.shipping.phone,
+							marketingConsent: input.marketingConsent
+						},
+						tx
+					);
+
+					const inserted = await tx.execute({
+						sql: `insert into orders (
+						        store_id, customer_id, order_number, email, phone,
+						        first_name, last_name, address1, address2, city, province,
+						        postal_code, country, shipping_method, subtotal_cents,
+						        shipping_cents, discount_cents, total_cents, currency, locale,
+						        status, idempotency_key
+						      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						args: [
+							storeId,
+							customerId,
+							orderNumber,
+							email,
+							input.shipping.phone ?? null,
+							input.shipping.firstName,
+							input.shipping.lastName,
+							input.shipping.address1,
+							input.shipping.address2 ?? null,
+							input.shipping.city,
+							input.shipping.province ?? null,
+							input.shipping.postalCode,
+							input.shipping.country,
+							input.method,
+							subtotalCents,
+							shippingCents,
+							0,
+							totalCents,
+							currency,
+							locale,
+							'pending_payment',
+							input.idempotencyKey ?? null
+						]
+					});
+
+					const orderId = Number(inserted.lastInsertRowid);
+
+					for (const item of resolved) {
+						await tx.execute({
+							sql: `insert into order_items (
+							        store_id, order_id, variant_id, product_slug, title, sku,
+							        option1, option2, option3, unit_price_cents, quantity
+							      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+							args: [
+								storeId,
+								orderId,
+								item.variantId,
+								item.productSlug,
+								item.title,
+								item.sku,
+								item.options[0],
+								item.options[1],
+								item.options[2],
+								item.unitPriceCents,
+								item.quantity
+							]
+						});
+					}
+
+					await customers.recordOrder(customerId, totalCents, tx);
+					await tx.commit();
+
+					return {
+						orderNumber,
+						customerId,
+						email,
+						status: 'pending_payment',
+						subtotalCents,
+						shippingCents,
+						totalCents,
+						currency,
+						items: resolved.map((item) => ({
+							sku: item.sku,
+							title: item.title,
+							options: item.options,
+							quantity: item.quantity,
+							unitPriceCents: item.unitPriceCents
+						}))
+					};
+				} catch (error) {
+					// Rolling back an already-closed transaction throws; letting that
+					// escape would replace the real cause with a confusing one.
+					try {
+						await tx.rollback();
+					} catch {
+						/* already closed */
+					}
+
+					// A concurrent call with the same key won the unique constraint;
+					// return its order rather than surfacing a database error.
+					if (input.idempotencyKey) {
+						const existing = await loadOrder('idempotency_key = ?', [input.idempotencyKey]);
+						if (existing) return { ...existing, deduplicated: true };
+					}
+					throw error;
+				}
+			});
 		},
 
 		byNumber(orderNumber) {
@@ -309,7 +324,7 @@ export function createOrderService(deps: {
 			const offset = Math.max(0, Math.trunc(opts.offset ?? 0));
 			const filter = opts.email ? 'and email = ?' : '';
 			const args: unknown[] = [storeId];
-			if (opts.email) args.push(opts.email.trim().toLowerCase());
+			if (opts.email) args.push(normalizeEmail(opts.email));
 			args.push(limit, offset);
 
 			const result = await db.execute({
@@ -325,12 +340,14 @@ export function createOrderService(deps: {
 			return orders.filter((o): o is Order => o !== null);
 		},
 
-		async setStatus(orderNumber, status) {
-			const result = await db.execute({
-				sql: `update orders set status = ? where store_id = ? and order_number = ?`,
-				args: [status, storeId, orderNumber]
+		setStatus(orderNumber, status) {
+			return withBusyRetry(async () => {
+				const result = await db.execute({
+					sql: `update orders set status = ? where store_id = ? and order_number = ?`,
+					args: [status, storeId, orderNumber]
+				});
+				return result.rowsAffected > 0;
 			});
-			return result.rowsAffected > 0;
 		}
 	};
 }

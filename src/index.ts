@@ -20,7 +20,15 @@ import { createStoreService, type Store, type StoreService } from './stores/inde
 import type { ShippingRate } from './shipping.ts';
 
 export type { Client, DatabaseConfig } from './db/index.ts';
-export { createDb, applySchema, schemaStatements, SCHEMA } from './db/index.ts';
+export {
+	createDb,
+	applySchema,
+	configureConnection,
+	schemaStatements,
+	withBusyRetry,
+	isBusyError,
+	SCHEMA
+} from './db/index.ts';
 export type { Store, StoreService } from './stores/index.ts';
 export { createStoreService } from './stores/index.ts';
 export type {

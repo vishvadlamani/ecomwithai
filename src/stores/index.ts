@@ -1,4 +1,4 @@
-import type { Client } from '../db/index.ts';
+import { withBusyRetry, type Client } from '../db/index.ts';
 
 export type Store = {
 	id: string;
@@ -61,7 +61,8 @@ export function createStoreService(db: Client): StoreService {
 			);
 		},
 
-		async setSetting(storeId, key, value) {
+		setSetting(storeId, key, value) {
+			return withBusyRetry(async () => {
 			if (value === null) {
 				await db.execute({
 					sql: 'delete from store_settings where store_id = ? and key = ?',
@@ -73,6 +74,7 @@ export function createStoreService(db: Client): StoreService {
 				sql: `insert into store_settings (store_id, key, value) values (?, ?, ?)
 				      on conflict (store_id, key) do update set value = excluded.value`,
 				args: [storeId, key, value]
+			});
 			});
 		}
 	};

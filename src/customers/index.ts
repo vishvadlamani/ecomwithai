@@ -1,4 +1,4 @@
-import type { Client } from '../db/index.ts';
+import { withBusyRetry, type Client } from '../db/index.ts';
 import type { Transaction } from '@libsql/client';
 
 /** Anything that can run a statement — the client, or an open transaction. */
@@ -68,9 +68,13 @@ export function createCustomerService(deps: { db: Client; storeId: string }): Cu
 	return {
 		async upsert(input, executor = db) {
 			const email = normalizeEmail(input.email);
+			// Only a standalone call may retry: inside a transaction the caller owns
+			// the retry, and re-running one statement would corrupt its sequencing.
+			const run = executor === db ? withBusyRetry : (w: () => Promise<number>) => w();
 
 			// Only overwrite names with non-empty values: a guest checkout that omits
 			// a field must not blank out what an earlier order supplied.
+			return run(async () => {
 			const result = await executor.execute({
 				sql: `insert into customers
 				        (store_id, email, first_name, last_name, phone, marketing_consent)
@@ -93,6 +97,7 @@ export function createCustomerService(deps: { db: Client; storeId: string }): Cu
 			});
 
 			return Number(result.rows[0].id);
+			});
 		},
 
 		async byEmail(email) {
@@ -125,6 +130,8 @@ export function createCustomerService(deps: { db: Client; storeId: string }): Cu
 		},
 
 		async recordOrder(customerId, totalCents, executor = db) {
+			const run = executor === db ? withBusyRetry : (w: () => Promise<void>) => w();
+			await run(async () => {
 			await executor.execute({
 				sql: `update customers
 				      set orders_count = orders_count + 1,
@@ -132,6 +139,7 @@ export function createCustomerService(deps: { db: Client; storeId: string }): Cu
 				          updated_at = datetime('now')
 				      where id = ? and store_id = ?`,
 				args: [totalCents, customerId, storeId]
+			});
 			});
 		}
 	};

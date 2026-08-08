@@ -1,4 +1,4 @@
-import type { Client } from '../db/index.ts';
+import { withBusyRetry, type Client } from '../db/index.ts';
 
 export type OptionValue = {
 	value: string;
@@ -136,7 +136,7 @@ export function createCatalogService(deps: {
 					args: [storeId, id]
 				}),
 				db.execute({
-					sql: `select v.option_id, v.value, v.label, v.swatch_hex, v.position,
+					sql: `select v.id, v.option_id, v.value, v.label, v.swatch_hex, v.position,
 					             (select m.url from product_media m
 					              where m.option_value_id = v.id order by m.position, m.id limit 1) as image_url
 					      from product_option_values v
@@ -164,8 +164,11 @@ export function createCatalogService(deps: {
 			]);
 
 			const valuesByOption = new Map<number, OptionValue[]>();
+			// option_value_id -> value, so media can name the value it illustrates.
+			const valueNameById = new Map<number, string>();
 			for (const v of values.rows) {
 				const optionId = Number(v.option_id);
+				valueNameById.set(Number(v.id), String(v.value));
 				const list = valuesByOption.get(optionId) ?? [];
 				list.push({
 					value: String(v.value),
@@ -223,7 +226,10 @@ export function createCatalogService(deps: {
 					url: String(m.url),
 					alt: m.alt === null ? null : String(m.alt),
 					position: Number(m.position),
-					optionValue: null
+					optionValue:
+						m.option_value_id === null
+							? null
+							: (valueNameById.get(Number(m.option_value_id)) ?? null)
 				})),
 				metafields: parsedMetafields
 			};
@@ -321,17 +327,20 @@ export function createCatalogService(deps: {
 			};
 		},
 
-		async adjustStock(variantId, delta) {
-			// Guarded so a negative delta can never drive stock below zero.
-			const result = await db.execute({
-				sql: `update product_variants set stock = stock + ?
-				      where id = ? and store_id = ? and stock + ? >= 0
-				      returning stock`,
-				args: [delta, variantId, storeId, delta]
+		adjustStock(variantId, delta) {
+			// Guarded so a negative delta can never drive stock below zero, and
+			// retried because a concurrent writer holding the lock is normal.
+			return withBusyRetry(async () => {
+				const result = await db.execute({
+					sql: `update product_variants set stock = stock + ?
+					      where id = ? and store_id = ? and stock + ? >= 0
+					      returning stock`,
+					args: [delta, variantId, storeId, delta]
+				});
+				const row = result.rows[0];
+				if (!row) throw new Error(`Cannot adjust variant ${variantId} by ${delta}`);
+				return Number(row.stock);
 			});
-			const row = result.rows[0];
-			if (!row) throw new Error(`Cannot adjust variant ${variantId} by ${delta}`);
-			return Number(row.stock);
 		}
 	};
 }
