@@ -179,6 +179,40 @@ create table if not exists order_items (
 	quantity integer not null
 );
 
+-- One row per payment attempt against an order. Provider-neutral: 'stripe' is
+-- the first implementation, not an assumption baked into the schema.
+create table if not exists payments (
+	id integer primary key autoincrement,
+	store_id text not null references stores (id) on delete cascade,
+	order_id integer not null references orders (id) on delete cascade,
+	provider text not null default 'stripe',
+	-- The provider's object id (a Checkout Session or PaymentIntent).
+	provider_ref text,
+	status text not null default 'pending',
+	amount_cents integer not null,
+	currency text not null,
+	failure_reason text,
+	created_at text not null default (datetime('now')),
+	updated_at text not null default (datetime('now')),
+	unique (provider, provider_ref)
+);
+
+-- Webhook idempotency. Providers retry aggressively and will redeliver an event
+-- days later; the unique constraint is what stops an order being paid twice or
+-- restocked twice.
+create table if not exists payment_events (
+	id integer primary key autoincrement,
+	provider text not null,
+	event_id text not null,
+	type text not null,
+	store_id text,
+	received_at text not null default (datetime('now')),
+	unique (provider, event_id)
+);
+
+create index if not exists idx_payments_order on payments (order_id);
+create index if not exists idx_payments_store on payments (store_id, status);
+
 create index if not exists idx_products_store on products (store_id, slug);
 create index if not exists idx_translations_product on product_translations (product_id, locale);
 create index if not exists idx_options_product on product_options (product_id);

@@ -57,12 +57,58 @@ export async function withBusyRetry<T>(
 	}
 }
 
-/** Splits the schema into executable statements, dropping comment-only chunks. */
+/**
+ * Splits SQL into executable statements.
+ *
+ * Tracks string literals and strips `--` comments before splitting, because a
+ * naive split on `;` breaks apart any comment containing one and hands SQLite
+ * the remainder as a statement.
+ */
 export function schemaStatements(sql: string = SCHEMA): string[] {
-	return sql
-		.split(';')
-		.map((s) => s.trim())
-		.filter((s) => s && !s.split('\n').every((line) => line.trim().startsWith('--')));
+	const statements: string[] = [];
+	let current = '';
+	let inString = false;
+
+	for (let i = 0; i < sql.length; i += 1) {
+		const char = sql[i];
+
+		if (inString) {
+			current += char;
+			// '' is an escaped quote inside a SQLite string literal.
+			if (char === "'") {
+				if (sql[i + 1] === "'") {
+					current += sql[i + 1];
+					i += 1;
+				} else {
+					inString = false;
+				}
+			}
+			continue;
+		}
+
+		if (char === "'") {
+			inString = true;
+			current += char;
+			continue;
+		}
+
+		if (char === '-' && sql[i + 1] === '-') {
+			const newline = sql.indexOf('\n', i);
+			i = newline === -1 ? sql.length : newline - 1;
+			continue;
+		}
+
+		if (char === ';') {
+			if (current.trim()) statements.push(current.trim());
+			current = '';
+			continue;
+		}
+
+		current += char;
+	}
+
+	if (current.trim()) statements.push(current.trim());
+	return statements;
 }
 
 /**

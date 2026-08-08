@@ -17,6 +17,8 @@ import { createDb, type Client, type DatabaseConfig } from './db/index.ts';
 import { createMetaService, type MetaConfig, type MetaService } from './marketing/index.ts';
 import { createOrderService, type OrderService } from './orders/index.ts';
 import { createStoreService, type Store, type StoreService } from './stores/index.ts';
+import { createStripePayments, type PaymentService } from './payments/index.ts';
+import type { StripeConfig } from './payments/stripe.ts';
 import type { ShippingRate } from './shipping.ts';
 
 export type { Client, DatabaseConfig } from './db/index.ts';
@@ -57,6 +59,22 @@ export {
 	type MetaService
 } from './marketing/index.ts';
 
+export type {
+	PaymentService,
+	Payment,
+	WebhookOutcome,
+	StartCheckoutResult
+} from './payments/index.ts';
+export {
+	createPaymentService,
+	createStripePayments,
+	createStripeClient,
+	peekStripeEvent,
+	verifyStripeSignature,
+	StripeError,
+	type StripeConfig
+} from './payments/index.ts';
+
 export type Commerce = {
 	db: Client;
 	store: Store;
@@ -65,6 +83,8 @@ export type Commerce = {
 	orders: OrderService;
 	/** Null unless a pixel id is configured for this store. */
 	meta: MetaService | null;
+	/** Null unless a payment provider is configured for this store. */
+	payments: PaymentService | null;
 };
 
 /**
@@ -85,6 +105,8 @@ export type CommerceConfig = {
 	shippingRates?: ShippingRate[];
 	orderNumberPrefix?: string;
 	meta?: Omit<MetaConfig, 'pixelId'> & { pixelId?: string };
+	/** Supply to enable payments. Without it `commerce.payments` is null. */
+	stripe?: StripeConfig;
 };
 
 export function createCommerce(config: CommerceConfig): Commerce {
@@ -112,5 +134,9 @@ export function createCommerce(config: CommerceConfig): Commerce {
 	const pixelId = config.meta?.pixelId;
 	const meta = pixelId ? createMetaService({ ...config.meta, pixelId }) : null;
 
-	return { db, store, catalog, customers, orders, meta };
+	const payments = config.stripe
+		? createStripePayments({ db, storeId, orders, catalog, config: config.stripe })
+		: null;
+
+	return { db, store, catalog, customers, orders, meta, payments };
 }

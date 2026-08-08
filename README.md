@@ -12,8 +12,8 @@ without a browser, a scraper, or a Shopify subscription.
 - **Agent-safe by construction** — schema-validated tool arguments, read-only by
   default, idempotent order creation.
 
-> Early and honest about it: the domain is solid and tested, but there is no
-> payment provider, tax engine or admin UI yet. See [Status](#status).
+> Early and honest about it: the domain and payments are tested, but there is no
+> tax engine or admin UI yet. See [Status](#status).
 
 ## Install
 
@@ -65,7 +65,8 @@ await toolkit.call('get_product', { slug: 'cotton-tee' });
 ```
 
 Tools: `list_products`, `get_product`, `find_variant`, `create_order`,
-`get_order`, `list_orders`, `set_order_status`, `find_customer`, `adjust_stock`.
+`get_order`, `list_orders`, `set_order_status`, `find_customer`,
+`start_checkout`, `get_payment`, `refund_order`, `adjust_stock`.
 
 ### MCP
 
@@ -117,6 +118,67 @@ between a resilient integration and a double charge.
 read by a model: `insufficient_stock (TEE-M) — order not created, nothing was
 charged`.
 
+## Payments
+
+Stripe, over the REST API — no SDK, so it runs on Workers like everything else.
+**No card details ever reach your servers**: `startCheckout` returns a Stripe
+hosted page and the order only becomes `paid` when a signed webhook says so.
+
+```ts
+const commerce = createCommerce({
+  db, store,
+  stripe: {
+    secretKey: env.STRIPE_SECRET_KEY,
+    webhookSecret: env.STRIPE_WEBHOOK_SECRET
+  }
+});
+
+const { url } = await commerce.payments.startCheckout({
+  orderNumber: order.orderNumber,
+  successUrl: 'https://example.com/thanks',
+  cancelUrl: 'https://example.com/cart'
+});
+```
+
+Webhook endpoint — pass the **raw** body, never a re-serialized object:
+
+```ts
+const raw = await request.text();
+const result = await commerce.payments.handleWebhook(
+  raw,
+  request.headers.get('stripe-signature')
+);
+return new Response(null, { status: result.handled ? 200 : 202 });
+```
+
+Return 2xx even when the event is ignored or duplicate, or Stripe will retry it
+forever. Reserve non-2xx for genuine processing failures you want redelivered.
+
+### What the webhook path guarantees
+
+**Signatures are verified** with HMAC-SHA256, a constant-time comparison and a
+five-minute freshness window. Anyone can POST to a webhook URL; a handler that
+trusts the body is a free-money bug.
+
+**Amounts are asserted, not assumed.** An event that settles for less than the
+order total, or in a different currency, is recorded as `amount_mismatch` and
+the order stays unpaid.
+
+**Events apply exactly once.** The event id is inserted in the same transaction
+as the state change, so redelivery — which Stripe does aggressively, sometimes
+days later — is a no-op, and concurrent deliveries collapse to one.
+
+**Abandoned checkouts return stock.** Stock is reserved when the order is
+created, so `checkout.session.expired` gives it back and cancels the order. An
+expiry arriving *after* payment is ignored rather than inflating inventory. A
+refund restocks too, configurable via `restockOnRefund`.
+
+**Tenancy is checked separately from authenticity.** A valid signature proves
+Stripe sent the event, not that it belongs to this store. Events carry
+`store_id` metadata; use `peekStripeEvent()` to route before handling.
+
+Still missing: tax. Use Stripe Tax rather than building it.
+
 ## Design
 
 **Interfaces, not implementations.** `CatalogService`, `CustomerService`,
@@ -153,12 +215,12 @@ same email is a separate customer per store.
 
 Working: catalog with generic options, variants, media, metafields and
 translations; customers with lifetime totals; orders with idempotency and stock
-safety; multi-tenancy; the agent toolkit and MCP server; Meta Conversions API
-with browser/server event deduplication.
+safety; Stripe payments with verified webhooks, refunds and stock release;
+multi-tenancy; the agent toolkit and MCP server; Meta Conversions API with
+browser/server event deduplication.
 
-Not built yet: payments (orders are written `pending_payment` and **no card
-details are collected anywhere**), tax, an admin UI, transactional email,
-refunds and returns.
+Not built yet: tax, an admin UI, transactional email, returns handling beyond
+refunds, and providers other than Stripe.
 
 ## Concurrency
 

@@ -252,6 +252,76 @@ export const TOOLS: ToolDefinition[] = [
 	},
 
 	{
+		name: 'start_checkout',
+		title: 'Start checkout',
+		description:
+			'Create a hosted payment page for an existing order and return its URL. Card details are collected by the payment provider, never by this store. Give the URL to the customer; the order is only marked paid once the provider confirms it.',
+		readOnly: false,
+		inputSchema: {
+			type: 'object',
+			required: ['orderNumber', 'successUrl', 'cancelUrl'],
+			properties: {
+				orderNumber: { type: 'string', maxLength: 64 },
+				successUrl: { type: 'string', maxLength: 2000 },
+				cancelUrl: { type: 'string', maxLength: 2000 }
+			}
+		},
+		handler: async (c, a) => {
+			if (!c.payments) throw new Error('No payment provider is configured for this store');
+			return c.payments.startCheckout({
+				orderNumber: a.orderNumber as string,
+				successUrl: a.successUrl as string,
+				cancelUrl: a.cancelUrl as string
+			});
+		}
+	},
+
+	{
+		name: 'get_payment',
+		title: 'Get payment status',
+		description:
+			'Payment state for an order: pending, succeeded, failed, expired, refunded, or amount_mismatch. Returns null when checkout has not started.',
+		readOnly: true,
+		inputSchema: {
+			type: 'object',
+			required: ['orderNumber'],
+			properties: { orderNumber: { type: 'string', maxLength: 64 } }
+		},
+		handler: async (c, a) => {
+			if (!c.payments) throw new Error('No payment provider is configured for this store');
+			return c.payments.byOrderNumber(a.orderNumber as string);
+		}
+	},
+
+	{
+		name: 'refund_order',
+		title: 'Refund an order',
+		description:
+			'Refund a paid order, fully or partially. This moves real money — only call it when a human has asked for this specific refund. Omit amountCents for a full refund.',
+		readOnly: false,
+		inputSchema: {
+			type: 'object',
+			required: ['orderNumber'],
+			properties: {
+				orderNumber: { type: 'string', maxLength: 64 },
+				amountCents: { type: 'integer', minimum: 1 },
+				reason: {
+					type: 'string',
+					enum: ['duplicate', 'fraudulent', 'requested_by_customer']
+				}
+			}
+		},
+		handler: async (c, a) => {
+			if (!c.payments) throw new Error('No payment provider is configured for this store');
+			return c.payments.refund({
+				orderNumber: a.orderNumber as string,
+				amountCents: a.amountCents as number | undefined,
+				reason: a.reason as 'duplicate' | 'fraudulent' | 'requested_by_customer' | undefined
+			});
+		}
+	},
+
+	{
 		name: 'adjust_stock',
 		title: 'Adjust stock',
 		description:

@@ -11,6 +11,7 @@ src/stores/     tenant resolution and per-store settings
 src/catalog/    products, options, variants, media, metafields
 src/customers/  identity and lifetime totals
 src/orders/     order creation, stock safety, idempotency
+src/payments/   Stripe over REST, webhook verification, refunds
 src/marketing/  Meta Conversions API and advanced-matching hashing
 src/agent/      tool definitions, validation, MCP server
 src/testing.ts  fixtures for tests and demos
@@ -45,6 +46,22 @@ leak, not a display bug. Extend `src/commerce.test.ts` when you add a module.
   including when a concurrent call wins the unique constraint.
 - Agent tool arguments are validated before reaching the domain, and writes stay
   off unless `allowWrites` is set.
+
+## Payments
+
+The webhook handler is the most security-sensitive code here. Four properties
+must survive any change:
+
+- signatures verified before anything is read from the body;
+- the amount and currency asserted against the order, never assumed;
+- the event id written in the *same transaction* as the state change, which is
+  what makes redelivery a no-op;
+- `store_id` checked separately — a valid signature proves Stripe sent it, not
+  that it belongs to this tenant.
+
+Stock is reserved at order creation, so anything that ends an order without
+payment must give it back. `onlyIfUnpaid` distinguishes abandonment (never
+restock a paid order) from refunds (the order did settle and the goods return).
 
 ## Gotchas
 
