@@ -129,7 +129,12 @@ const commerce = createCommerce({
   db, store,
   stripe: {
     secretKey: env.STRIPE_SECRET_KEY,
-    webhookSecret: env.STRIPE_WEBHOOK_SECRET
+    webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+    // Set this whenever the Stripe account isn't named after the store the
+    // buyer thinks they bought from. An unrecognised line on a card statement
+    // is one of the most common causes of a chargeback, and the customer
+    // disputing it is behaving reasonably.
+    statementDescriptorSuffix: 'COTTONTEE'
   }
 });
 

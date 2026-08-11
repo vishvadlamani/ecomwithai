@@ -16,6 +16,16 @@ export type StripeConfig = {
 	/** Endpoint signing secret (`whsec_...`). Required to accept webhooks. */
 	webhookSecret?: string;
 	apiVersion?: string;
+	/**
+	 * Appended to the account's statement descriptor on the card statement.
+	 *
+	 * Worth setting whenever the Stripe account is not named after the store the
+	 * customer thinks they bought from: an unrecognised descriptor is one of the
+	 * most common causes of a chargeback, and the customer disputing it is
+	 * behaving reasonably. Stripe caps prefix + suffix at 22 characters and
+	 * rejects `<>'"\` and `*`.
+	 */
+	statementDescriptorSuffix?: string;
 	/** Override for a proxy or a test double. */
 	baseUrl?: string;
 	/** Injected so tests never touch the network. */
@@ -194,6 +204,11 @@ export function createStripeClient(config: StripeConfig): StripeClient {
 				...metadata
 			};
 
+			const paymentIntentData: Record<string, unknown> = { metadata: sharedMetadata };
+			if (config.statementDescriptorSuffix) {
+				paymentIntentData.statement_descriptor_suffix = config.statementDescriptorSuffix;
+			}
+
 			const body = await request(
 				'POST',
 				'/v1/checkout/sessions',
@@ -205,7 +220,7 @@ export function createStripeClient(config: StripeConfig): StripeClient {
 					customer_email: order.email,
 					line_items: lineItems,
 					metadata: sharedMetadata,
-					payment_intent_data: { metadata: sharedMetadata }
+					payment_intent_data: paymentIntentData
 				},
 				`checkout:${storeId}:${order.orderNumber}`
 			);
