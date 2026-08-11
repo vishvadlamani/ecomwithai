@@ -42,6 +42,24 @@ export type OrderItem = {
 	unitPriceCents: number;
 };
 
+/**
+ * Where the order is going. Captured on the order rather than read back off the
+ * customer, because a customer's current address is not the address a shipment
+ * from last year went to.
+ */
+export type OrderShipping = {
+	firstName: string;
+	lastName: string;
+	phone: string | null;
+	address1: string;
+	address2: string | null;
+	city: string;
+	province: string | null;
+	postalCode: string;
+	country: string;
+	method: string;
+};
+
 export type Order = {
 	orderNumber: string;
 	customerId: number | null;
@@ -51,6 +69,7 @@ export type Order = {
 	shippingCents: number;
 	totalCents: number;
 	currency: string;
+	shipping: OrderShipping;
 	items: OrderItem[];
 	createdAt?: string;
 	/** True when an existing order was returned via the idempotency key. */
@@ -108,8 +127,10 @@ export function createOrderService(deps: {
 
 	async function loadOrder(where: string, args: InValue[]): Promise<Order | null> {
 		const result = await db.execute({
-			sql: `select id, order_number, customer_id, email, status, subtotal_cents,
-			             shipping_cents, total_cents, currency, created_at
+			sql: `select id, order_number, customer_id, email, phone, status, subtotal_cents,
+			             shipping_cents, total_cents, currency, created_at,
+			             first_name, last_name, address1, address2, city, province,
+			             postal_code, country, shipping_method
 			      from orders where store_id = ? and ${where}`,
 			args: [storeId, ...args]
 		});
@@ -132,6 +153,18 @@ export function createOrderService(deps: {
 			totalCents: Number(row.total_cents),
 			currency: String(row.currency),
 			createdAt: String(row.created_at),
+			shipping: {
+				firstName: String(row.first_name),
+				lastName: String(row.last_name),
+				phone: row.phone === null || row.phone === undefined ? null : String(row.phone),
+				address1: String(row.address1),
+				address2: row.address2 === null || row.address2 === undefined ? null : String(row.address2),
+				city: String(row.city),
+				province: row.province === null || row.province === undefined ? null : String(row.province),
+				postalCode: String(row.postal_code),
+				country: String(row.country),
+				method: String(row.shipping_method)
+			},
 			items: items.rows.map((i) => ({
 				sku: String(i.sku),
 				title: String(i.title),
@@ -288,6 +321,18 @@ export function createOrderService(deps: {
 						shippingCents,
 						totalCents,
 						currency,
+						shipping: {
+							firstName: input.shipping.firstName,
+							lastName: input.shipping.lastName,
+							phone: input.shipping.phone ?? null,
+							address1: input.shipping.address1,
+							address2: input.shipping.address2 ?? null,
+							city: input.shipping.city,
+							province: input.shipping.province ?? null,
+							postalCode: input.shipping.postalCode,
+							country: input.shipping.country,
+							method: input.method
+						},
 						items: resolved.map((item) => ({
 							sku: item.sku,
 							title: item.title,
