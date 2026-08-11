@@ -17,14 +17,20 @@ export type StripeConfig = {
 	webhookSecret?: string;
 	apiVersion?: string;
 	/**
-	 * Appended to the account's statement descriptor on the card statement.
+	 * What the buyer sees on their card statement.
 	 *
 	 * Worth setting whenever the Stripe account is not named after the store the
 	 * customer thinks they bought from: an unrecognised descriptor is one of the
 	 * most common causes of a chargeback, and the customer disputing it is
-	 * behaving reasonably. Stripe caps prefix + suffix at 22 characters and
-	 * rejects `<>'"\` and `*`.
+	 * behaving reasonably.
+	 *
+	 * `statementDescriptor` replaces the account default outright.
+	 * `statementDescriptorSuffix` appends to the account's *prefix*, and only
+	 * works if one is configured — an account whose full descriptor is already
+	 * at Stripe's 22-character limit has no room, so prefer the full form there.
+	 * Stripe caps both at 22 characters and rejects `<>'"\` and `*`.
 	 */
+	statementDescriptor?: string;
 	statementDescriptorSuffix?: string;
 	/** Override for a proxy or a test double. */
 	baseUrl?: string;
@@ -205,6 +211,9 @@ export function createStripeClient(config: StripeConfig): StripeClient {
 			};
 
 			const paymentIntentData: Record<string, unknown> = { metadata: sharedMetadata };
+			if (config.statementDescriptor) {
+				paymentIntentData.statement_descriptor = config.statementDescriptor;
+			}
 			if (config.statementDescriptorSuffix) {
 				paymentIntentData.statement_descriptor_suffix = config.statementDescriptorSuffix;
 			}
