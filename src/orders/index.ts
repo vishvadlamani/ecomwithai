@@ -3,6 +3,7 @@ import type { InValue } from '@libsql/client';
 import type { CatalogService } from '../catalog/index.ts';
 import { normalizeEmail, type CustomerService } from '../customers/index.ts';
 import { DEFAULT_SHIPPING_RATES, resolveShippingCents, type ShippingRate } from '../shipping.ts';
+import { applyQuantityBreak, type QuantityBreak } from '../pricing.ts';
 
 export type CartLine = { variantId: number; quantity: number };
 
@@ -114,12 +115,15 @@ export function createOrderService(deps: {
 	customers: CustomerService;
 	defaultLocale?: string;
 	shippingRates?: ShippingRate[];
+	/** Buy-more-save-more tiers. Empty means every unit is full price. */
+	quantityBreaks?: QuantityBreak[];
 	/** Injected so tests can produce deterministic order numbers. */
 	orderNumber?: () => string;
 	orderNumberPrefix?: string;
 }): OrderService {
 	const { db, storeId, currency, catalog, customers } = deps;
 	const rates = deps.shippingRates ?? DEFAULT_SHIPPING_RATES;
+	const quantityBreaks = deps.quantityBreaks ?? [];
 	const prefix = deps.orderNumberPrefix ?? 'ORD';
 	const nextOrderNumber =
 		deps.orderNumber ??
@@ -222,7 +226,13 @@ export function createOrderService(deps: {
 					return { ...variant, quantity };
 				});
 
-				const totalCents = subtotalCents + shippingCents;
+				// The discount is derived from the quantity the server just counted,
+				// after duplicate lines were merged — a client could otherwise split
+				// one order across lines, or simply post a discount of its choosing.
+				const totalUnits = resolved.reduce((sum, item) => sum + item.quantity, 0);
+				const bundle = applyQuantityBreak(quantityBreaks, subtotalCents, totalUnits);
+				const discountCents = bundle.discountCents;
+				const totalCents = bundle.totalCents + shippingCents;
 				const orderNumber = nextOrderNumber();
 
 				const tx = await db.transaction('write');
@@ -276,7 +286,7 @@ export function createOrderService(deps: {
 							input.method,
 							subtotalCents,
 							shippingCents,
-							0,
+							discountCents,
 							totalCents,
 							currency,
 							locale,

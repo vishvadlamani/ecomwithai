@@ -25,7 +25,8 @@
     "./marketing": "./src/marketing/index.ts",
     "./db": "./src/db/index.ts",
     "./schema": "./src/db/schema.ts",
-    "./payments": "./src/payments/index.ts"
+    "./payments": "./src/payments/index.ts",
+    "./pricing": "./src/pricing.ts"
   },
   "files": [
     "src",

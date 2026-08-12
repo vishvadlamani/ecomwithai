@@ -20,6 +20,8 @@ import { createStoreService, type Store, type StoreService } from './stores/inde
 import { createStripePayments, type PaymentService } from './payments/index.ts';
 import type { StripeConfig } from './payments/stripe.ts';
 import type { ShippingRate } from './shipping.ts';
+import type { QuantityBreak } from './pricing.ts';
+export * from './pricing.ts';
 
 export type { Client, DatabaseConfig } from './db/index.ts';
 export {
@@ -85,6 +87,8 @@ export type Commerce = {
 	meta: MetaService | null;
 	/** Null unless a payment provider is configured for this store. */
 	payments: PaymentService | null;
+	/** The configured buy-more-save-more tiers, for a storefront to render. */
+	quantityBreaks: QuantityBreak[];
 };
 
 /**
@@ -103,6 +107,11 @@ export type CommerceConfig = {
 	db: Client;
 	store: Store;
 	shippingRates?: ShippingRate[];
+	/**
+	 * Buy-more-save-more tiers. Applied to the quantity the server counts, so a
+	 * storefront renders them but never decides them.
+	 */
+	quantityBreaks?: QuantityBreak[];
 	orderNumberPrefix?: string;
 	meta?: Omit<MetaConfig, 'pixelId'> & { pixelId?: string };
 	/** Supply to enable payments. Without it `commerce.payments` is null. */
@@ -128,6 +137,7 @@ export function createCommerce(config: CommerceConfig): Commerce {
 		customers,
 		defaultLocale: store.defaultLocale,
 		shippingRates: config.shippingRates,
+		quantityBreaks: config.quantityBreaks,
 		orderNumberPrefix: config.orderNumberPrefix
 	});
 
@@ -138,5 +148,14 @@ export function createCommerce(config: CommerceConfig): Commerce {
 		? createStripePayments({ db, storeId, orders, catalog, config: config.stripe })
 		: null;
 
-	return { db, store, catalog, customers, orders, meta, payments };
+	return {
+		db,
+		store,
+		catalog,
+		customers,
+		orders,
+		meta,
+		payments,
+		quantityBreaks: config.quantityBreaks ?? []
+	};
 }

@@ -6,7 +6,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createCommerce, createStoreService } from './index.ts';
+import { applyQuantityBreak, createCommerce, createStoreService, resolveQuantityBreak } from './index.ts';
 import { createTestDb, seedProduct, seedStore } from './testing.ts';
 import type { Store } from './stores/index.ts';
 import { createAgentToolkit } from './agent/index.ts';
@@ -228,3 +228,89 @@ db.close();
 await rm(dir, { recursive: true, force: true });
 console.log(failures ? `\n${failures} finding(s)` : '\nNo findings.');
 process.exitCode = failures ? 1 : 0;
+
+// --- quantity breaks -------------------------------------------------------
+// Bundle pricing decides what a customer is charged, so the cases that matter
+// are the ones where a client could push the total the wrong way.
+{
+	const TIERS = [
+		{ minQuantity: 2, percentOff: 7 },
+		{ minQuantity: 3, percentOff: 9 }
+	];
+
+	check('below the first tier nothing is discounted', applyQuantityBreak(TIERS, 4497, 1), {
+		applied: null,
+		discountCents: 0,
+		totalCents: 4497
+	});
+
+	check(
+		'the highest qualifying tier wins',
+		applyQuantityBreak(TIERS, 13491, 3).applied?.percentOff,
+		9
+	);
+
+	check(
+		'a table written out of order still picks the best tier',
+		resolveQuantityBreak(
+			[
+				{ minQuantity: 3, percentOff: 9 },
+				{ minQuantity: 2, percentOff: 7 }
+			],
+			5
+		)?.percentOff,
+		9
+	);
+
+	check(
+		'quantities above the top tier keep the top discount',
+		resolveQuantityBreak(TIERS, 50)?.percentOff,
+		9
+	);
+
+	// Rounding the total instead of the discount leaves an order whose parts do
+	// not sum to what was charged — which resurfaces as a webhook amount
+	// mismatch that is very hard to read.
+	check(
+		'discount plus total always equals the subtotal',
+		[1, 99, 4497, 13491, 99999, 100003].every((subtotal) =>
+			[1, 2, 3, 7].every((qty) => {
+				const r = applyQuantityBreak(TIERS, subtotal, qty);
+				return r.discountCents + r.totalCents === subtotal;
+			})
+		),
+		true
+	);
+
+	check(
+		'a discount can never exceed the subtotal',
+		applyQuantityBreak([{ minQuantity: 1, percentOff: 100 }], 4497, 1),
+		{ applied: { minQuantity: 1, percentOff: 100 }, discountCents: 4497, totalCents: 0 }
+	);
+
+	check(
+		'nonsense tiers are ignored rather than applied',
+		resolveQuantityBreak(
+			[
+				{ minQuantity: 2, percentOff: 0 },
+				{ minQuantity: 2, percentOff: -20 },
+				{ minQuantity: 2, percentOff: 500 },
+				{ minQuantity: Number.NaN, percentOff: 50 }
+			],
+			10
+		),
+		null
+	);
+
+	check(
+		'a zero or negative quantity discounts nothing',
+		[resolveQuantityBreak(TIERS, 0), resolveQuantityBreak(TIERS, -5)],
+		[null, null]
+	);
+
+	check('an empty tier table is a no-op, not a crash', applyQuantityBreak([], 4497, 9), {
+		applied: null,
+		discountCents: 0,
+		totalCents: 4497
+	});
+}

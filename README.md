@@ -195,6 +195,26 @@ swapping it at `createCommerce()` — no call site changes.
 framework, because a Worker, a Node process and a test read their environment
 differently.
 
+**Quantity breaks are server-side.** Configure buy-more-save-more tiers on
+`createCommerce`, and the order recomputes the discount from the quantity it
+counted after merging duplicate lines. A storefront renders the tiers; it never
+decides them, because a discount a client can send is a discount a client can
+choose.
+
+```ts
+const commerce = createCommerce({
+  db, store,
+  quantityBreaks: [
+    { minQuantity: 2, percentOff: 7 },
+    { minQuantity: 3, percentOff: 9 }
+  ]
+});
+```
+
+The discount is rounded, not the total, so `subtotal - discount + shipping`
+always equals the amount charged — round the total instead and the mismatch
+resurfaces later as a webhook `amount_mismatch` that is very hard to read.
+
 **Product-shape agnostic.** Options are generic name/value pairs with up to
 three axes, so the same schema sells t-shirts, coffee subscriptions or
 single-SKU hardware. Nothing in the core knows what a "size" is. Structured
