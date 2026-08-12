@@ -32,6 +32,13 @@ export type StripeConfig = {
 	 */
 	statementDescriptor?: string;
 	statementDescriptorSuffix?: string;
+	/**
+	 * Which payment methods to offer, as a Stripe payment method configuration
+	 * id. Without one Stripe uses the account default — which is the wrong knob
+	 * when one account serves several businesses, because changing it changes
+	 * them all.
+	 */
+	paymentMethodConfiguration?: string;
 	/** Override for a proxy or a test double. */
 	baseUrl?: string;
 	/** Injected so tests never touch the network. */
@@ -227,6 +234,9 @@ export function createStripeClient(config: StripeConfig): StripeClient {
 					// Lets Stripe decide which methods to offer from the dashboard
 					// settings rather than hard-coding cards here.
 					automatic_payment_methods: { enabled: true },
+					...(config.paymentMethodConfiguration
+						? { payment_method_configuration: config.paymentMethodConfiguration }
+						: {}),
 					receipt_email: order.email,
 					metadata: sharedMetadata,
 					...(config.statementDescriptor
