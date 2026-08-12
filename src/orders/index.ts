@@ -68,6 +68,8 @@ export type Order = {
 	status: string;
 	subtotalCents: number;
 	shippingCents: number;
+	/** Bundle or promotional discount already reflected in `totalCents`. */
+	discountCents: number;
 	totalCents: number;
 	currency: string;
 	shipping: OrderShipping;
@@ -132,7 +134,7 @@ export function createOrderService(deps: {
 	async function loadOrder(where: string, args: InValue[]): Promise<Order | null> {
 		const result = await db.execute({
 			sql: `select id, order_number, customer_id, email, phone, status, subtotal_cents,
-			             shipping_cents, total_cents, currency, created_at,
+			             shipping_cents, discount_cents, total_cents, currency, created_at,
 			             first_name, last_name, address1, address2, city, province,
 			             postal_code, country, shipping_method
 			      from orders where store_id = ? and ${where}`,
@@ -154,6 +156,7 @@ export function createOrderService(deps: {
 			status: String(row.status),
 			subtotalCents: Number(row.subtotal_cents),
 			shippingCents: Number(row.shipping_cents),
+			discountCents: Number(row.discount_cents),
 			totalCents: Number(row.total_cents),
 			currency: String(row.currency),
 			createdAt: String(row.created_at),
@@ -329,6 +332,7 @@ export function createOrderService(deps: {
 						status: 'pending_payment',
 						subtotalCents,
 						shippingCents,
+						discountCents,
 						totalCents,
 						currency,
 						shipping: {

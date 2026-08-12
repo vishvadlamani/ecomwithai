@@ -83,7 +83,15 @@ export function encodeForm(value: unknown, prefix = ''): string {
 
 export type CheckoutSession = {
 	id: string;
+	/** Set in hosted mode: the Stripe-hosted page to send the customer to. */
 	url: string | null;
+	/**
+	 * Set in embedded mode: hand this to Stripe.js and the card form mounts on
+	 * your own page. Card data still goes straight to Stripe from an iframe, so
+	 * the PCI position is the same as the hosted page — the customer just never
+	 * leaves the site.
+	 */
+	clientSecret: string | null;
 	status: string;
 	paymentIntentId: string | null;
 	amountTotal: number | null;
@@ -93,13 +101,26 @@ export type CheckoutSession = {
 export interface StripeClient {
 	createCheckoutSession(input: {
 		order: Order;
-		successUrl: string;
-		cancelUrl: string;
+		/** Hosted mode only: where Stripe returns a paying customer. */
+		successUrl?: string;
+		/** Hosted mode only: where Stripe returns someone who backed out. */
+		cancelUrl?: string;
+		/** Embedded mode only: where Stripe returns after the on-page form. */
+		returnUrl?: string;
+		/** Defaults to 'hosted' so existing callers are unaffected. */
+		uiMode?: 'hosted' | 'embedded';
 		storeId: string;
 		/** Extra metadata copied onto the session and the payment intent. */
 		metadata?: Record<string, string>;
 	}): Promise<CheckoutSession>;
 	getCheckoutSession(id: string): Promise<CheckoutSession>;
+	/** Fixed-amount, single-use coupon. Used to carry an order's discount. */
+	createCoupon(input: {
+		amountOffCents: number;
+		currency: string;
+		name?: string;
+		idempotencyKey?: string;
+	}): Promise<{ id: string }>;
 	refund(input: {
 		paymentIntentId: string;
 		amountCents?: number;
@@ -114,6 +135,10 @@ function toSession(body: Record<string, unknown>): CheckoutSession {
 	return {
 		id: String(body.id),
 		url: body.url === null || body.url === undefined ? null : String(body.url),
+		clientSecret:
+			body.client_secret === null || body.client_secret === undefined
+				? null
+				: String(body.client_secret),
 		status: String(body.status ?? 'open'),
 		paymentIntentId:
 			intent === null || intent === undefined
@@ -175,7 +200,30 @@ export function createStripeClient(config: StripeConfig): StripeClient {
 	}
 
 	return {
-		async createCheckoutSession({ order, successUrl, cancelUrl, storeId, metadata }) {
+		async createCoupon({ amountOffCents, currency, name, idempotencyKey }) {
+			const body = await request(
+				'POST',
+				'/v1/coupons',
+				{
+					amount_off: amountOffCents,
+					currency: currency.toLowerCase(),
+					duration: 'once',
+					...(name ? { name } : {})
+				},
+				idempotencyKey
+			);
+			return { id: String(body.id) };
+		},
+
+		async createCheckoutSession({
+			order,
+			successUrl,
+			cancelUrl,
+			returnUrl,
+			uiMode = 'hosted',
+			storeId,
+			metadata
+		}) {
 			const currency = order.currency.toLowerCase();
 
 			const lineItems = order.items.map((item) => ({
@@ -218,13 +266,37 @@ export function createStripeClient(config: StripeConfig): StripeClient {
 				paymentIntentData.statement_descriptor_suffix = config.statementDescriptorSuffix;
 			}
 
+			// Stripe rejects success_url/cancel_url in embedded mode and return_url
+			// in hosted mode, so the two shapes are built separately rather than
+			// merged and filtered.
+			const urls =
+				uiMode === 'embedded'
+					? { ui_mode: 'embedded', return_url: returnUrl }
+					: { success_url: successUrl, cancel_url: cancelUrl };
+
+			// Line items sum to subtotal + shipping. An order with a discount totals
+			// less than that, and the webhook asserts the two match — so without
+			// this the customer is charged the undiscounted amount and the payment
+			// is then rejected as a mismatch. A single-use coupon closes the gap
+			// exactly, with no rounding to distribute across lines.
+			let discounts: { coupon: string }[] | undefined;
+			if (order.discountCents > 0) {
+				const coupon = await this.createCoupon({
+					amountOffCents: order.discountCents,
+					currency,
+					name: `Bundle discount · ${order.orderNumber}`,
+					idempotencyKey: `coupon:${storeId}:${order.orderNumber}`
+				});
+				discounts = [{ coupon: coupon.id }];
+			}
+
 			const body = await request(
 				'POST',
 				'/v1/checkout/sessions',
 				{
 					mode: 'payment',
-					success_url: successUrl,
-					cancel_url: cancelUrl,
+					...urls,
+					...(discounts ? { discounts } : {}),
 					client_reference_id: order.orderNumber,
 					customer_email: order.email,
 					line_items: lineItems,

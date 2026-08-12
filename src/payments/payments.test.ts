@@ -132,6 +132,9 @@ const mockStripe: typeof fetch = async (input, init) => {
 			{ status: 200 }
 		);
 	}
+	if (path === '/v1/coupons') {
+		return new Response(JSON.stringify({ id: 'coupon_test_1' }), { status: 200 });
+	}
 	if (path === '/v1/refunds') {
 		return new Response(
 			JSON.stringify({ id: 're_test_1', status: 'succeeded', amount: 2000 }),
@@ -177,7 +180,12 @@ const checkout = await payments.startCheckout({
 	successUrl: 'https://shop.test/thanks',
 	cancelUrl: 'https://shop.test/cart'
 });
-check('checkout returns a hosted URL', checkout.url.startsWith('https://checkout.stripe.com/'), true);
+check(
+	'checkout returns a hosted URL',
+	checkout.url?.startsWith('https://checkout.stripe.com/'),
+	true
+);
+check('hosted mode carries no client secret', checkout.clientSecret, null);
 
 const sessionRequest = requests.find((r) => r.path === '/v1/checkout/sessions')!;
 const body = decodeURIComponent(sessionRequest.body);
@@ -339,6 +347,75 @@ check('refund webhook releases stock',
 check('order marked refunded',
 	(await commerce.orders.byNumber(order.orderNumber))?.status, 'refunded');
 check('refunded stock returned', (await commerce.catalog.findVariant(seed.productId, []))?.stock, 10);
+
+// --- a discounted order must charge the discounted amount ----------------
+// Line items sum to subtotal + shipping, and the webhook asserts the session
+// total equals the order total. A bundle order without a coupon is therefore
+// charged the full price and *then* refused — the worst of both.
+{
+	const store = (await stores.byId('shop')) as Store;
+	const discounted = createCommerce({
+		db,
+		store,
+		quantityBreaks: [{ minQuantity: 2, percentOff: 10 }],
+		stripe: { secretKey: 'sk_test_x', webhookSecret: SECRET, fetch: mockStripe }
+	});
+
+	const order = await discounted.orders.create({
+		lines: [{ variantId: seed.variantIds['TEE-1'], quantity: 2 }],
+		method: 'standard',
+		shipping: {
+			email: 'bundle@example.com',
+			firstName: 'B',
+			lastName: 'T',
+			address1: '1 St',
+			city: 'Lisbon',
+			postalCode: '1100',
+			country: 'PT'
+		},
+		idempotencyKey: 'bundle-session-test'
+	});
+
+	check('a bundle order records its discount', order.discountCents > 0, true);
+	check(
+		'the order total is subtotal minus discount plus shipping',
+		order.subtotalCents - order.discountCents + order.shippingCents,
+		order.totalCents
+	);
+
+	requests.length = 0;
+	await discounted.payments!.startCheckout({
+		orderNumber: order.orderNumber,
+		successUrl: 'https://shop.test/ok',
+		cancelUrl: 'https://shop.test/no'
+	});
+
+	const coupon = requests.find((r) => r.path === '/v1/coupons');
+	check('a coupon is created for the discount', Boolean(coupon), true);
+	check(
+		'the coupon is worth exactly the order discount',
+		coupon ? new URLSearchParams(coupon.body).get('amount_off') : null,
+		String(order.discountCents)
+	);
+
+	const session = requests.find((r) => r.path === '/v1/checkout/sessions');
+	const params = new URLSearchParams(session?.body ?? '');
+	check('the session applies the coupon', params.get('discounts[0][coupon]'), 'coupon_test_1');
+
+	// The number Stripe will settle for, recomputed from what we actually sent.
+	let lineTotal = 0;
+	for (let i = 0; ; i += 1) {
+		const amount = params.get(`line_items[${i}][price_data][unit_amount]`);
+		if (amount === null) break;
+		lineTotal += Number(amount) * Number(params.get(`line_items[${i}][quantity]`) ?? 1);
+	}
+	check(
+		'line items minus the coupon equal the order total',
+		lineTotal - order.discountCents,
+		order.totalCents
+	);
+}
+
 
 db.close();
 await rm(dir, { recursive: true, force: true });

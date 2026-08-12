@@ -32,9 +32,14 @@ export type Payment = {
 };
 
 export type StartCheckoutResult = {
-	/** Send the customer here. Stripe hosts the card form, so no card data ever
-	 *  reaches this application. */
-	url: string;
+	/** Hosted mode: send the customer here. Null in embedded mode. */
+	url: string | null;
+	/**
+	 * Embedded mode: hand to Stripe.js to mount the form on your own page. Null
+	 * in hosted mode. Either way the card is entered in a Stripe-owned context
+	 * and never reaches this application.
+	 */
+	clientSecret: string | null;
 	sessionId: string;
 	orderNumber: string;
 	amountCents: number;
@@ -57,8 +62,12 @@ export type WebhookOutcome =
 export interface PaymentService {
 	startCheckout(input: {
 		orderNumber: string;
-		successUrl: string;
-		cancelUrl: string;
+		/** Hosted mode. */
+		successUrl?: string;
+		cancelUrl?: string;
+		/** Embedded mode: where Stripe returns once the on-page form completes. */
+		returnUrl?: string;
+		uiMode?: 'hosted' | 'embedded';
 		metadata?: Record<string, string>;
 	}): Promise<StartCheckoutResult>;
 	/**
@@ -200,7 +209,14 @@ export function createPaymentService(deps: {
 	}
 
 	return {
-		async startCheckout({ orderNumber, successUrl, cancelUrl, metadata }) {
+		async startCheckout({
+			orderNumber,
+			successUrl,
+			cancelUrl,
+			returnUrl,
+			uiMode = 'hosted',
+			metadata
+		}) {
 			const order = await orders.byNumber(orderNumber);
 			if (!order) throw new Error(`No order "${orderNumber}"`);
 
@@ -208,12 +224,17 @@ export function createPaymentService(deps: {
 				order,
 				successUrl,
 				cancelUrl,
+				returnUrl,
+				uiMode,
 				storeId,
 				metadata
 			});
 
-			if (!session.url) {
-				throw new Error(`Stripe returned no checkout URL for ${orderNumber}`);
+			// Whichever mode was asked for, the thing that mounts the form has to
+			// come back — a session without it is unusable and better surfaced here
+			// than as a blank payment step.
+			if (uiMode === 'embedded' ? !session.clientSecret : !session.url) {
+				throw new Error(`Stripe returned an unusable ${uiMode} session for ${orderNumber}`);
 			}
 
 			const row = await orderRow(orderNumber);
@@ -237,6 +258,7 @@ export function createPaymentService(deps: {
 
 			return {
 				url: session.url,
+				clientSecret: session.clientSecret,
 				sessionId: session.id,
 				orderNumber,
 				amountCents: order.totalCents
