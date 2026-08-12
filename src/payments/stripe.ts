@@ -114,6 +114,18 @@ export interface StripeClient {
 		metadata?: Record<string, string>;
 	}): Promise<CheckoutSession>;
 	getCheckoutSession(id: string): Promise<CheckoutSession>;
+	/**
+	 * A payment intent for the order total, for mounting Stripe's Payment
+	 * Element directly in your own checkout form. Unlike a Checkout Session
+	 * this is a single amount, so an order discount needs no coupon to
+	 * reconcile — the intent is simply the amount owed.
+	 */
+	createPaymentIntent(input: {
+		order: Order;
+		storeId: string;
+		metadata?: Record<string, string>;
+		idempotencyKey?: string;
+	}): Promise<{ id: string; clientSecret: string; amountCents: number }>;
 	/** Fixed-amount, single-use coupon. Used to carry an order's discount. */
 	createCoupon(input: {
 		amountOffCents: number;
@@ -200,6 +212,36 @@ export function createStripeClient(config: StripeConfig): StripeClient {
 	}
 
 	return {
+		async createPaymentIntent({ order, storeId, metadata, idempotencyKey }) {
+			const sharedMetadata = {
+				order_number: order.orderNumber,
+				store_id: storeId,
+				...metadata
+			};
+			const body = await request(
+				'POST',
+				'/v1/payment_intents',
+				{
+					amount: order.totalCents,
+					currency: order.currency.toLowerCase(),
+					// Lets Stripe decide which methods to offer from the dashboard
+					// settings rather than hard-coding cards here.
+					automatic_payment_methods: { enabled: true },
+					receipt_email: order.email,
+					metadata: sharedMetadata,
+					...(config.statementDescriptor
+						? { statement_descriptor: config.statementDescriptor }
+						: {})
+				},
+				idempotencyKey
+			);
+			return {
+				id: String(body.id),
+				clientSecret: String(body.client_secret),
+				amountCents: Number(body.amount)
+			};
+		},
+
 		async createCoupon({ amountOffCents, currency, name, idempotencyKey }) {
 			const body = await request(
 				'POST',

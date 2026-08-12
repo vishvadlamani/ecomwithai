@@ -138,29 +138,12 @@ const commerce = createCommerce({
   }
 });
 
-// Hosted: Stripe's own page.
 const { url } = await commerce.payments.startCheckout({
   orderNumber: order.orderNumber,
   successUrl: 'https://example.com/thanks',
   cancelUrl: 'https://example.com/cart'
 });
-
-// Embedded: the form mounts on your page instead. Same PCI position — the
-// card is still entered in a Stripe-owned iframe — but the customer never
-// leaves the site, which is where redirects lose people.
-const { clientSecret } = await commerce.payments.startCheckout({
-  orderNumber: order.orderNumber,
-  uiMode: 'embedded',
-  returnUrl: 'https://example.com/thanks'
-});
 ```
-
-**A discounted order carries a coupon.** Line items sum to subtotal plus
-shipping, and the webhook asserts the session total equals the order total — so
-an order with a `quantityBreaks` discount and no coupon is charged the *full*
-amount and then refused as a mismatch. `startCheckout` creates a single-use
-coupon for exactly `order.discountCents`, which closes the gap with no rounding
-to spread across lines.
 
 Webhook endpoint — pass the **raw** body, never a re-serialized object:
 

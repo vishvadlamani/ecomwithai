@@ -71,6 +71,14 @@ export interface PaymentService {
 		metadata?: Record<string, string>;
 	}): Promise<StartCheckoutResult>;
 	/**
+	 * Payment for an order, to be completed by Stripe's Payment Element inside
+	 * your own checkout form — no redirect, no second step.
+	 */
+	startPayment(input: {
+		orderNumber: string;
+		metadata?: Record<string, string>;
+	}): Promise<{ clientSecret: string; paymentIntentId: string; amountCents: number }>;
+	/**
 	 * Pass the raw request body — not a parsed object. Re-serializing JSON
 	 * changes bytes and the signature will never match.
 	 */
@@ -262,6 +270,39 @@ export function createPaymentService(deps: {
 				sessionId: session.id,
 				orderNumber,
 				amountCents: order.totalCents
+			};
+		},
+
+		async startPayment({ orderNumber, metadata }) {
+			const order = await orders.byNumber(orderNumber);
+			if (!order) throw new Error(`No order "${orderNumber}"`);
+
+			const intent = await stripe.createPaymentIntent({
+				order,
+				storeId,
+				metadata,
+				idempotencyKey: `intent:${storeId}:${orderNumber}`
+			});
+
+			// The intent is the order total outright, so there is no coupon to
+			// reconcile — but the amount is still asserted on the way back in, in
+			// case the intent was altered after it was created.
+			const row = await orderRow(orderNumber);
+			await withBusyRetry(() =>
+				db.execute({
+					sql: `insert into payments
+					        (store_id, order_id, provider, provider_ref, status, amount_cents, currency)
+					      values (?, ?, ?, ?, 'pending', ?, ?)
+					      on conflict (provider, provider_ref) do update set
+					        status = 'pending', updated_at = datetime('now')`,
+					args: [storeId, Number(row!.id), provider, intent.id, order.totalCents, order.currency]
+				})
+			);
+
+			return {
+				clientSecret: intent.clientSecret,
+				paymentIntentId: intent.id,
+				amountCents: intent.amountCents
 			};
 		},
 
