@@ -10,6 +10,10 @@ export type MetaEventName =
 	| 'ViewContent'
 	| 'AddToCart'
 	| 'InitiateCheckout'
+	// Fired when someone submits their payment details, not when the form is
+	// merely on screen — a checkout that reports it on page load teaches the
+	// campaign that everyone who arrived was ready to pay.
+	| 'AddPaymentInfo'
 	| 'Purchase';
 
 export type MetaCustomData = {
